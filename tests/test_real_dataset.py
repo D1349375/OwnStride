@@ -43,6 +43,31 @@ def test_wisdm_session_extraction_provenance():
     assert 0.5 <= mean_mag <= 2.0, f"Mean acceleration magnitude {mean_mag} out of physical range"
 
 
+def test_wisdm_uses_real_timestamps():
+    """WISDM 各受試者取樣率不同（約 20 或 25 Hz）；時間軸必須依實際時間戳，而不是假設 20 Hz"""
+    loader = WISDMLoader()
+    rates = {round(loader.get_subject_session(subject_id=s, n_samples=10)[2]["original_hz"]) for s in (1, 3)}
+    assert rates == {20, 25}
+
+
+def test_wisdm_stride_segmentation_is_physiological():
+    """每位受試者都能切出一致的跨步：跨步時間在成人步行範圍內，且不再一步／一跨步交替"""
+    from src.dataset.wisdm_loader import WISDM_TARGET_RATE
+    from src.features.event_detector import GaitEventDetector
+
+    loader = WISDMLoader()
+    detector = GaitEventDetector(sample_rate=WISDM_TARGET_RATE)
+    medians, cvs = [], []
+    for sid in range(1, loader.load_walking_data()["user"].nunique() + 1):
+        acc, _, _ = loader.get_subject_session(subject_id=sid, n_samples=int(20 * WISDM_TARGET_RATE))
+        d = np.array([s["duration_sec"] for s in detector.segment_strides(acc)["strides"]])
+        assert len(d) >= 3, f"subject {sid}: too few strides"
+        medians.append(np.median(d))
+        cvs.append(np.std(d) / np.mean(d))
+    assert 0.8 <= min(medians) and max(medians) <= 1.4
+    assert np.median(cvs) < 0.08
+
+
 def test_marea_loader_benchmark_real_delegation():
     loader = MAREALoader()
     acc, gyro, meta = loader.get_or_create_benchmark_data(subject_id=1)

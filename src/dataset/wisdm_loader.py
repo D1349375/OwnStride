@@ -10,7 +10,7 @@ Reference: Kwapisz, J. R., Weiss, G. M., & Moore, S. A. (2011).
 
 Sensor: Smartphone accelerometer (Motorola Droid, Samsung Galaxy, etc.)
 Placement: Thigh (pants pocket)
-Sample Rate: ~20 Hz (variable timestamp spacing)
+Sample Rate: ~20 Hz or ~25 Hz depending on the phone (resampled by real timestamps)
 Axes: X (lateral), Y (forward), Z (vertical) in m/s2
 Subjects: 36 real human participants
 Walking samples: 418,393 data points
@@ -202,26 +202,23 @@ class WISDMLoader:
         idx = (subject_id - 1) % len(available_users)
         actual_user = available_users[idx]
 
-        subj_df = walking_df[walking_df["user"] == actual_user].copy()
-        subj_df = subj_df.sort_values("timestamp").reset_index(drop=True)
-
+        subj_df = walking_df[walking_df["user"] == actual_user].sort_values("timestamp")
         original_n = len(subj_df)
-        original_hz = 20.0
 
-        acc_raw = subj_df[["acc_x", "acc_y", "acc_z"]].values
+        # 依實際時間戳重新取樣（2026-09-25 修正）：WISDM 各受試者的取樣率不同（約 20 Hz 或 25 Hz），
+        # 且有重複時間戳與斷訊。舊版一律假設 20 Hz，25 Hz 受試者的時間軸會被拉長 25%。
+        t = subj_df["timestamp"].to_numpy(dtype=np.float64) / 1e9   # 奈秒 → 秒
+        acc_raw = subj_df[["acc_x", "acc_y", "acc_z"]].to_numpy()
+        keep = np.concatenate([[True], np.diff(t) > 0])
+        t, acc_raw = t[keep], acc_raw[keep]
+        segment = self._first_continuous_segment(t)
+        t_seg = t[segment] - t[segment[0]]
+        original_hz = float(1.0 / np.median(np.diff(t_seg)))
 
-        if resample_to_hz != original_hz:
-            from scipy.interpolate import interp1d
-            t_orig = np.linspace(0, original_n / original_hz, original_n)
-            duration = original_n / original_hz
-            t_new = np.arange(0, duration, 1.0 / resample_to_hz)
-            acc_resampled = np.zeros((len(t_new), 3))
-            for ch in range(3):
-                interp_fn = interp1d(t_orig, acc_raw[:, ch], kind="linear",
-                                     fill_value="extrapolate")
-                acc_resampled[:, ch] = interp_fn(t_new)
-        else:
-            acc_resampled = acc_raw.copy()
+        from scipy.interpolate import interp1d
+        t_new = np.arange(0.0, t_seg[-1], 1.0 / resample_to_hz)
+        acc_resampled = np.column_stack(
+            [interp1d(t_seg, acc_raw[segment, ch], kind="linear")(t_new) for ch in range(3)])
 
         if n_samples is not None:
             acc_resampled = acc_resampled[:n_samples]
@@ -236,7 +233,8 @@ class WISDMLoader:
             "wisdm_user_id": int(actual_user),
             "requested_subject_id": subject_id,
             "original_samples": original_n,
-            "original_hz": original_hz,
+            "original_hz": round(original_hz, 1),
+            "continuous_segment_sec": round(float(t_seg[-1]), 1),
             "resampled_hz": resample_to_hz,
             "resampled_samples": len(acc_resampled),
             "gyro_available": False,
@@ -244,6 +242,19 @@ class WISDMLoader:
         }
 
         return acc_resampled, gyro_zeros, metadata
+
+    MAX_GAP_SEC = 0.25        # 超過此間隔視為斷訊（不跨斷訊內插）
+    MIN_SEGMENT_SEC = 12.0
+
+    @classmethod
+    def _first_continuous_segment(cls, t: np.ndarray) -> np.ndarray:
+        """回傳第一段沒有斷訊、長度至少 MIN_SEGMENT_SEC 的樣本索引；都不夠長時取最長的一段。"""
+        breaks = np.where(np.diff(t) > cls.MAX_GAP_SEC)[0] + 1
+        segments = np.split(np.arange(len(t)), breaks)
+        for seg in segments:
+            if len(seg) > 1 and t[seg[-1]] - t[seg[0]] >= cls.MIN_SEGMENT_SEC:
+                return seg
+        return max(segments, key=len)
 
     def get_all_subjects_summary(self) -> pd.DataFrame:
         """

@@ -492,11 +492,53 @@ def close_day():
     }
 
 
+def _stride_stats(durations: List[float]) -> Dict[str, Any]:
+    d = np.array(durations)
+    return {
+        "median_stride_sec": round(float(np.median(d)), 3),
+        "cadence_steps_per_min": round(float(120.0 / np.median(d)), 1),   # 1 跨步 = 2 步
+        "stride_time_cv": round(float(np.std(d) / np.mean(d)), 3),
+    }
+
+
+_wisdm_cohort_cache: Optional[Dict[str, Any]] = None
+
+
+def _wisdm_cohort() -> Dict[str, Any]:
+    """全部 WISDM 受試者各取 20 秒連續行走，以同一切分器計算跨步時間（結果快取）。"""
+    global _wisdm_cohort_cache
+    if _wisdm_cohort_cache is None:
+        from src.dataset.wisdm_loader import WISDMLoader, WISDM_TARGET_RATE
+        from src.features.event_detector import GaitEventDetector
+
+        loader, detector = WISDMLoader(), GaitEventDetector(sample_rate=WISDM_TARGET_RATE)
+        n_users = loader.load_walking_data()["user"].nunique()
+        medians, cvs, kept, total = [], [], 0, 0
+        for sid in range(1, n_users + 1):
+            acc, _, _ = loader.get_subject_session(subject_id=sid, n_samples=int(20 * WISDM_TARGET_RATE))
+            seg = detector.segment_strides(acc)
+            if len(seg["strides"]) < 3:
+                continue
+            stats = _stride_stats([x["duration_sec"] for x in seg["strides"]])
+            medians.append(stats["median_stride_sec"])
+            cvs.append(stats["stride_time_cv"])
+            kept += len(seg["strides"])
+            total += len(seg["strides"]) + seg["rejected"]
+        _wisdm_cohort_cache = {
+            "subjects": len(medians),
+            "median_stride_sec_range": [round(min(medians), 2), round(max(medians), 2)],
+            "median_stride_sec": round(float(np.median(medians)), 2),
+            "median_stride_time_cv": round(float(np.median(cvs)), 3),
+            "strides_kept_ratio": round(kept / total, 3),
+        }
+    return _wisdm_cohort_cache
+
+
 @app.get("/api/benchmark/real")
-def get_real_walking_benchmark(subject_id: int = 1, n_samples: int = 640):
+def get_real_walking_benchmark(subject_id: int = 1, n_samples: int = 1280):
     """
-    真人資料檢查：WISDM v1.1 手機加速度（無陀螺儀）→ 僅加速度的步態週期切分。
-    只能驗證週期切分在真人訊號上可運作；此資料無法計算足偏角。
+    真人資料檢查：WISDM v1.1 手機加速度（無陀螺儀，手機在大腿口袋）→ 僅加速度的跨步切分。
+    只能驗證跨步時間與步頻在真人訊號上可切分；此資料無法計算足偏角，也無法可靠定出腳尖離地。
     """
     from src.dataset.wisdm_loader import WISDMLoader, WISDM_TARGET_RATE
     from src.features.event_detector import GaitEventDetector
@@ -505,24 +547,24 @@ def get_real_walking_benchmark(subject_id: int = 1, n_samples: int = 640):
     if not loader.is_downloaded():
         raise HTTPException(status_code=404, detail="WISDM data not available locally")
     acc, _, meta = loader.get_subject_session(subject_id=subject_id, n_samples=n_samples)
-    cycles = GaitEventDetector(sample_rate=WISDM_TARGET_RATE).segment_gait_cycles(acc, None)
+    seg = GaitEventDetector(sample_rate=WISDM_TARGET_RATE).segment_strides(acc)
+    strides = seg["strides"]
 
     return {
         "is_synthetic": False,
         "metadata": meta,
-        "limitations": "Smartphone accelerometer only (no gyroscope): stride timing only, no foot progression angle.",
+        "limitations": ("Thigh-pocket phone accelerometer only (no gyroscope): stride time and cadence only; "
+                        "no foot progression angle and no reliable toe-off timing."),
         "samples_count": len(acc),
-        "cycles_detected": len(cycles),
-        "cycle_details": [
-            {
-                "cycle_index": i + 1,
-                "heel_strike_idx": int(c["hs_start"]),
-                "toe_off_idx": int(c["to"]),
-                "duration_sec": round(float(c["duration_sec"]), 3),
-                "stance_ratio": round(float(c["stance_ratio"]), 3),
-            }
-            for i, c in enumerate(cycles[:10])
+        "stride_period_sec": seg["stride_period_sec"],
+        "strides_detected": len(strides),
+        "strides_rejected": seg["rejected"],
+        "stride_stats": _stride_stats([x["duration_sec"] for x in strides]) if strides else None,
+        "stride_details": [
+            {"stride_index": i + 1, "start_idx": x["start"], "end_idx": x["end"], "duration_sec": round(x["duration_sec"], 3)}
+            for i, x in enumerate(strides[:12])
         ],
+        "cohort": _wisdm_cohort(),
         "acc_waveform_preview": {
             "x": [round(float(v), 3) for v in acc[:128, 0]],
             "y": [round(float(v), 3) for v in acc[:128, 1]],

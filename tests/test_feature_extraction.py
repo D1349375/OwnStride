@@ -74,8 +74,12 @@ def test_feature_vector_contract():
         "cadence", "stride_length", "stance_ratio", "fpa", "eversion_angle", "impact_magnitude"]
 
 
-def test_accelerometer_only_segmenter_still_segments():
-    """僅加速度的切分器（供 WISDM 使用）在含衝擊的步態訊號上仍能切出週期"""
+def test_accelerometer_only_segmenter_finds_stride_period():
+    """僅加速度的切分器（供 WISDM 使用）：自相關找出的跨步週期要接近合成真值，且每個跨步只切一次"""
     acc, gyro, truth = SyntheticGaitStream(sample_rate=128.0, seed=9).generate_walk_session(n_strides=20)
-    cycles = GaitEventDetector(sample_rate=128.0).segment_gait_cycles(acc, None)
-    assert len(cycles) >= 10
+    seg = GaitEventDetector(sample_rate=128.0).segment_strides(acc)
+    true_period = float(truth["stride_time"].mean())
+    assert abs(seg["stride_period_sec"] - true_period) < 0.1 * true_period
+    assert len(seg["strides"]) >= 10
+    durations = np.array([s["duration_sec"] for s in seg["strides"]])
+    assert np.all(np.abs(durations - true_period) < 0.25 * true_period)

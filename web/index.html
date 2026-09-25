@@ -1400,8 +1400,8 @@
         close_done: (d, dev, rate, ph, changed, b, th) => `✓ 第 ${d} 天關帳：平均落後 ${dev} • 進步速率 ${rate}%/週 ➔ ${changed ? `<strong>轉入 Phase ${ph}</strong>` : `維持 Phase ${ph}`} • 明日配額 ${b} 次、閾值 ${th}`,
         ratchet_done: (v) => ` • <strong>個人最佳上調至 ${v}°</strong>`,
         close_pending: (p, d, n) => ` • 今天偏離較多，<strong>轉入 Phase ${p} 待確認（${d}/${n} 天）</strong>：連續 ${n} 天都如此才會轉換，明天恢復就取消`,
-        wisdm_done: (u, n, dur, ms) => `✓ WISDM 受試者 #${u}（手機加速度，無陀螺儀）• 切出 <strong>${n}</strong> 個步態週期：${dur} • <strong>此資料無法計算足偏角</strong> • ${ms} ms`,
-        wisdm_legend: "實心 = 支撐期、空心 = 擺動期（真人加速度切分結果）", wisdm_badge: "WISDM 真人資料：僅步態週期時間",
+        wisdm_done: (u, n, dur, st, c) => `✓ WISDM 受試者 #${u}（大腿口袋手機加速度，無陀螺儀）• 切出 <strong>${n}</strong> 個跨步：${dur} • 跨步時間中位數 ${st.median_stride_sec.toFixed(2)} s、步頻 ${st.cadence_steps_per_min} 步/分、變異係數 ${(st.stride_time_cv * 100).toFixed(1)}%<br>全部 ${c.subjects} 位受試者：跨步時間 ${c.median_stride_sec_range[0].toFixed(2)}–${c.median_stride_sec_range[1].toFixed(2)} s（中位數 ${c.median_stride_sec.toFixed(2)} s）、變異係數中位數 ${(c.median_stride_time_cv * 100).toFixed(1)}% • <strong>此資料無法計算足偏角</strong>`,
+        wisdm_legend: "每格 = 一個跨步，寬度 = 跨步時間（真人加速度切分結果）", wisdm_badge: "WISDM 真人資料：僅跨步時間",
         track_axis: "前進方向 →   虛線 = 每步實際前進方向（FPA 以此為 0°）",
         l2_heading: "個人走廊與多週趨勢",
         corridor_title: "個人走廊曲線（一個步態週期 0–100%）", ch_fpa: "足部朝向角", ch_ev: "足部額狀面傾角",
@@ -1503,8 +1503,8 @@
         close_done: (d, dev, rate, ph, changed, b, th) => `✓ Day ${d} closed: mean shortfall ${dev} • progress ${rate}%/week ➔ ${changed ? `<strong>moved to Phase ${ph}</strong>` : `stays in Phase ${ph}`} • tomorrow: ${b} cues, threshold ${th}`,
         ratchet_done: (v) => ` • <strong>personal best raised to ${v}°</strong>`,
         close_pending: (p, d, n) => ` • today slipped, so <strong>Phase ${p} is pending (day ${d}/${n})</strong>: it switches only after ${n} such days in a row and is cancelled if tomorrow recovers`,
-        wisdm_done: (u, n, dur, ms) => `✓ WISDM subject #${u} (phone accelerometer, no gyroscope) • <strong>${n}</strong> gait cycles: ${dur} • <strong>foot progression angle cannot be computed from this data</strong> • ${ms} ms`,
-        wisdm_legend: "Filled = stance, outline = swing (segmentation of real accelerometer data)", wisdm_badge: "WISDM real data: stride timing only",
+        wisdm_done: (u, n, dur, st, c) => `✓ WISDM subject #${u} (thigh-pocket phone accelerometer, no gyroscope) • <strong>${n}</strong> strides: ${dur} • median stride ${st.median_stride_sec.toFixed(2)} s, cadence ${st.cadence_steps_per_min} steps/min, CV ${(st.stride_time_cv * 100).toFixed(1)}%<br>All ${c.subjects} subjects: stride time ${c.median_stride_sec_range[0].toFixed(2)}–${c.median_stride_sec_range[1].toFixed(2)} s (median ${c.median_stride_sec.toFixed(2)} s), median CV ${(c.median_stride_time_cv * 100).toFixed(1)}% • <strong>foot progression angle cannot be computed from this data</strong>`,
+        wisdm_legend: "Each box = one stride, width = stride time (segmentation of real accelerometer data)", wisdm_badge: "WISDM real data: stride timing only",
         track_axis: "walking direction →   dashed = each stride's actual direction (FPA 0°)",
         l2_heading: "Personal Corridor & Multi-Week Trends",
         corridor_title: "Personal corridor (one gait cycle, 0–100%)", ch_fpa: "Foot heading", ch_ev: "Frontal-plane tilt",
@@ -1951,19 +1951,20 @@
       const btn = $("btn-real-benchmark");
       btn.disabled = true;
       try {
-        const t0 = performance.now();
         const res = await fetch("/api/benchmark/real?subject_id=1&n_samples=1280");
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || res.status);
-        const durations = data.cycle_details.map((c) => `${c.duration_sec.toFixed(2)}s`).join(", ");
-        setTelemetry(T().wisdm_done(data.metadata.wisdm_user_id, data.cycles_detected, durations, Math.round(performance.now() - t0)));
+        if (!data.stride_stats) throw new Error("no strides segmented");
+        const durations = data.stride_details.map((c) => `${c.duration_sec.toFixed(2)}s`).join(", ");
+        setTelemetry(T().wisdm_done(data.metadata.wisdm_user_id, data.strides_detected, durations, data.stride_stats, data.cohort));
         const ctx = drawTrackBg(), cv = $("trackCanvas");
         ctx.fillStyle = "#93c5fd"; ctx.strokeStyle = "#93c5fd"; ctx.font = "11px ui-monospace, monospace";
         let x = 30;
-        data.cycle_details.forEach((c) => {
-          const w = c.duration_sec * 120;
-          ctx.fillRect(x, cv.height / 2 - 8, w * c.stance_ratio, 16);
+        data.stride_details.forEach((c) => {
+          const w = c.duration_sec * 60;
+          if (x + w > cv.width - 10) return;
           ctx.strokeRect(x, cv.height / 2 - 8, w, 16);
+          ctx.fillText(c.duration_sec.toFixed(2), x + 4, cv.height / 2 + 24);
           x += w + 4;
         });
         ctx.fillText(T().wisdm_legend, 14, cv.height - 10);
