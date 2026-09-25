@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+
+# Datasets are not redistributed (download instructions in README)
+data/
+
+# Hardware recordings
+*.csv
+
+# Internal planning documents (kept out of the public repository)
+競賽規劃書.md
+簡章重點.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
