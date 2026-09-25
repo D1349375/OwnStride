@@ -1,8 +1,8 @@
 """
 tests/test_llm_planner.py
 =========================
-驗證每週計畫生成：規則式備援、相對個人基線的方向判斷、Phase 1 措辭，
-以及以本機假 Ollama 伺服器驗證串流／非串流解析與 tok/s 統計（不需要真的安裝 Ollama）。
+驗證每週計畫生成：規則式備援、相對個人基線的方向判斷、Phase 1 措辭、程式與 LLM 的分工
+（數字由程式寫、LLM 只寫敘述並從動作庫挑選），以及以本機假 Ollama 伺服器驗證串流／非串流解析與 tok/s 統計。
 """
 
 import json
@@ -11,17 +11,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from src.llm.training_planner import LLMTrainingPlanner, WeeklyTrainingPlan, classify_fpa
+from src.llm.training_planner import (GOAL_EXERCISES, LLMTrainingPlanner, WeekSummary, WeeklyTrainingPlan,
+                                      _llm_output_schema, classify_fpa, exercise_items)
 
 UNREACHABLE = "http://127.0.0.1:9"
 BANNED = ("diagnos", "clinical", "rehabilitat", "patient", "treatment", "prescription")
 
+# 假 LLM 的輸出：只有敘述欄位與動作 id（其中一個不在清單內，應被忽略）
 FAKE_PLAN = {
-    "week_number": 3, "current_phase": 2, "phase_title": "Phase 2", "faded_feedback_guidance": "fewer cues",
-    "movement_analysis": "toes turned in", "primary_focus": "point toes forward", "daily_cue_budget": 20,
-    "exercises": [{"name": "Clamshell", "target_muscle": "Glutes", "frequency": "3x/wk", "dosage": "3x15",
-                   "rationale": "hip rotation"}],
-    "weekly_summary": "good week",
+    "primary_focus": "point toes forward", "exercise_ids": ["band_side_step", "not_in_menu"],
+    "faded_feedback_guidance": "fewer cues", "weekly_summary": "good week",
 }
 
 
@@ -94,12 +93,36 @@ def test_fallback_plan_in_traditional_chinese():
     assert plan.exercises[0].name == "彈力帶蚌殼式"
 
 
-def test_prompt_pre_interprets_trend_for_small_model():
+def test_prompt_contains_interpretations_but_no_raw_numbers():
+    """1.5B 模型會誤讀數字：prompt 只給判讀後的文字，不給任何測量數值"""
     planner = LLMTrainingPlanner(ollama_url=UNREACHABLE)
-    prompt = planner.build_prompt(**{**ARGS, "improvement_rate": -12.0})
-    assert "slipping" in prompt
-    assert "-12.0%" not in prompt
+    history = [WeekSummary(week=1, mean_fpa=-11.6, mean_deviation=0.37, phase=1, cues_per_day=5.9)]
+    prompt = planner.build_prompt(**{**ARGS, "improvement_rate": -12.0}, history=history,
+                                  baseline_fpa=-9.0, baseline_fpa_sd=1.5, goal_direction=1)
+    assert "slipping" in prompt and "moved toward the training goal" in prompt
+    for number in ("-12.0", "-5.2", "2.35", "-9.0", "-11.6", "0.37", "5.9", "20"):
+        assert number not in prompt
     assert "繁體中文" in planner.build_prompt(**ARGS, lang="zh")
+
+
+def test_llm_can_only_pick_exercises_from_the_goal_menu():
+    schema = _llm_output_schema(1)
+    assert schema["properties"]["exercise_ids"]["items"]["enum"] == GOAL_EXERCISES[1]
+    assert set(schema["required"]) == {"primary_focus", "exercise_ids", "faded_feedback_guidance", "weekly_summary"}
+    # 清單外或重複的 id 被忽略，不足 2 項時補上預設動作
+    items = exercise_items(["short_foot", "clamshell", "clamshell"], goal=1, lang="en")
+    assert [e.name for e in items] == ["Clamshell with Resistance Band", "Straight-Line Walking Drill"]
+
+
+def test_analysis_is_written_by_code_with_consistent_numbers():
+    history = [WeekSummary(week=1, mean_fpa=-11.6, mean_deviation=0.37, phase=1, cues_per_day=5.9)]
+    plan = LLMTrainingPlanner(ollama_url=UNREACHABLE).generate_plan(
+        **{**ARGS, "mean_fpa": 5.4, "improvement_rate": 0.0}, history=history,
+        baseline_fpa=5.8, baseline_fpa_sd=1.2, goal_direction=1)
+    text = plan.movement_analysis
+    assert "+5.4°" in text and "+5.8°" in text and "at your personal best" in text
+    assert "steady" in text and "from -11.6° to +5.4° (toward your goal)" in text
+    assert "-0.0" not in text
 
 
 def test_simplified_chinese_output_is_converted_to_traditional():
@@ -123,7 +146,12 @@ def test_non_streaming_llm_path_with_stats(fake_ollama):
     assert plan.is_generated_by_ollama is True
     assert plan.model_name == "qwen2.5:1.5b"
     assert plan.generation_stats["tokens_per_sec"] == 20.0
+    # 敘述來自 LLM；週次、Phase、配額、數據解讀與動作內容來自程式
     assert plan.primary_focus == "point toes forward"
+    assert plan.week_number == 3 and plan.current_phase == 2 and plan.daily_cue_budget == 20
+    assert "-5.2°" in plan.movement_analysis
+    assert [e.name for e in plan.exercises] == ["Banded Side Steps", "Clamshell with Resistance Band"]
+    assert "movement_analysis" not in plan.llm_fields and "exercises" in plan.llm_fields
 
 
 def test_streaming_llm_path_emits_tokens_then_done(fake_ollama):

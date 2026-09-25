@@ -1418,6 +1418,7 @@
         l3_heading: "每週訓練計畫（本機 LLM）", btn_plan: "產生本週計畫", btn_plan_busy: "生成中...",
         ex_heading: "本週訓練動作",
         prov_llm: (m, t, s, w) => `本機 LLM ${m} • ${t} tokens • ${s} tok/s • ${w} s`,
+        prov_split: "LLM 撰寫本週重點、提示建議與總結，並從審核過的動作清單挑選；數字、數據解讀與動作內容由程式產生",
         prov_fallback: (r) => `規則式備援（未使用 LLM）：${r}`,
         llm_ready: "LLM 已載入", llm_loading: "LLM 載入中...", llm_unavail: "LLM 不可用", llm_notstarted: "LLM 未啟動",
         plan_lang_note: "這份計畫是以英文生成的；按「產生本週計畫」可用中文重新生成。",
@@ -1458,7 +1459,7 @@
             "z = (今日平均 − 基線平均) / 基線標準差，標準差取自 Ledoit-Wolf 收縮共變異數對角線。雙側顯示。僅供觀察：有訓練方向時只有足偏角參與落後程度與提示判斷。"],
           plan: ["每週訓練計畫",
             "每週根據你這週跟最佳狀態的比較，產生一份白話的練習建議。全部在這台電腦上計算，資料不上雲。如果 LLM 無法使用，會清楚標示改用固定範本。",
-            "本機 Ollama 執行 Qwen2.5-1.5B（Stage II 目標為同一模型部署於 Hailo-10H），structured output JSON；數字判讀由程式先完成、LLM 只負責敘述；顯示實測 tokens/s。1.5B 模型可能誤讀數字，屬已知限制。"],
+            "本機 Ollama 執行 Qwen2.5-1.5B（Stage II 目標為同一模型部署於 Hailo-10H），structured output JSON；顯示實測 tokens/s。1.5B 模型會誤讀數字，因此 prompt 不提供任何原始數字：數據解讀與所有數字由程式寫，LLM 只寫敘述，動作只能從該訓練方向的審核清單中挑選（JSON schema enum 限制）。"],
         },
       },
       en: {
@@ -1519,6 +1520,7 @@
         l3_heading: "Weekly Training Plan (on-device LLM)", btn_plan: "Generate this week's plan", btn_plan_busy: "Generating...",
         ex_heading: "Exercises this week",
         prov_llm: (m, t, s, w) => `On-device LLM ${m} • ${t} tokens • ${s} tok/s • ${w} s`,
+        prov_split: "The LLM writes the focus, cue advice and summary and picks exercises from a vetted list; numbers, the data analysis and exercise details come from code",
         prov_fallback: (r) => `Rule-based fallback (no LLM): ${r}`,
         llm_ready: "LLM loaded", llm_loading: "LLM loading...", llm_unavail: "LLM unavailable", llm_notstarted: "LLM not started",
         plan_lang_note: "This plan was generated in Chinese; press “Generate this week's plan” to regenerate it in English.",
@@ -1559,7 +1561,7 @@
             "z = (today's mean − baseline mean) / baseline SD, SD from the diagonal of the Ledoit-Wolf covariance. Shown two-sided, for observation only: with a training goal, only the foot angle drives the shortfall and cues."],
           plan: ["Weekly plan",
             "Every week you get plain-language practice suggestions based on how this week compared with your best. Everything runs on this computer; no data goes to the cloud. If the LLM is unavailable, the plan is clearly marked as a fixed template.",
-            "Local Ollama running Qwen2.5-1.5B (Stage II targets the same model on Hailo-10H) with structured JSON output; numbers are interpreted in code and the LLM only writes the narrative; measured tokens/s is shown. A 1.5B model can misread numbers — a known limitation."],
+            "Local Ollama running Qwen2.5-1.5B (Stage II targets the same model on Hailo-10H) with structured JSON output; measured tokens/s is shown. A 1.5B model misreads numbers, so the prompt contains no raw numbers: the data analysis and every number are written by code, the LLM writes only the narrative, and it can pick exercises only from a vetted list for the training goal (enforced by a JSON-schema enum)."],
         },
       },
     };
@@ -1974,7 +1976,8 @@
       const prov = $("plan-provenance");
       if (p.is_generated_by_ollama) {
         const st = p.generation_stats || {};
-        prov.textContent = t.prov_llm(p.model_name, st.output_tokens ?? "?", st.tokens_per_sec ?? "?", st.wall_time_sec ?? "?");
+        prov.textContent = t.prov_llm(p.model_name, st.output_tokens ?? "?", st.tokens_per_sec ?? "?", st.wall_time_sec ?? "?")
+          + " • " + t.prov_split;
         prov.style.color = "var(--status-normal)";
       } else {
         prov.textContent = t.prov_fallback(p.fallback_reason || "");
