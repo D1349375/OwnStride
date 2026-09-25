@@ -3,7 +3,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
-[![Tests](https://img.shields.io/badge/tests-55%20passed-success.svg)](https://pytest.org)
+[![Tests](https://img.shields.io/badge/tests-59%20passed-success.svg)](https://pytest.org)
 [![Hailo-10H](https://img.shields.io/badge/Target%20NPU-Hailo--10H%20(UGen300)-orange.svg)](https://hailo.ai/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -85,11 +85,11 @@ OwnStride partitions computation strictly by **evolutionary necessity** rather t
 |---|---|
 | Foot progression angle / eversion / stride length | Computed from 6-axis IMU signals by strapdown attitude integration with zero-velocity updates (`src/features/foot_imu.py`). Magnetometer-free: each stride's heading reference is re-set at foot-flat. |
 | Algorithm validation | On a **kinematics-first synthetic simulator** (`src/dataset/synthetic_stream.py`): foot motion is defined first, IMU readings are derived from it, and the analyzer must recover the known angles from the signals alone. Mean FPA error < 0.4° across normal / in-toeing / out-toeing / over-pronation, both feet. This checks the mathematics, **not real-world accuracy**. |
-| Real human data | WISDM v1.1 (Kwapisz et al. 2011) smartphone accelerometer only — no gyroscope — so it is used **only** to check gait-cycle segmentation on real walking. It cannot produce a foot progression angle. MAREA requires a signed data-release agreement and has not been obtained. |
+| Real human data | WISDM v1.1 (Kwapisz et al. 2011) thigh-pocket smartphone accelerometer only — no gyroscope — so it is used **only** to check stride segmentation on real walking (resampled by the real timestamps, since phones recorded at ~20 or ~25 Hz; stride period from autocorrelation). Across all 36 subjects: stride time 0.91–1.25 s (median 1.07 s), median stride-time CV 3.8%. It cannot produce a foot progression angle, and toe-off timing is not reported because a thigh-worn phone cannot place it reliably. MAREA requires a signed data-release agreement and has not been obtained. |
 | Hardware | ESP32 + MPU-6050 firmware (`firmware/`) and host serial bridge (`src/hardware/serial_bridge.py`) with a tape-line validation mode. **Not yet tested on a worn device.** |
 | Personal baseline | **Personal-best days**: during a 14-day calibration the user walks as usual; the best 5 days in the user-chosen training direction (reduce in-toeing / reduce out-toeing / maintain) form the Ledoit-Wolf baseline. Deviation uses **only the trained feature** (foot progression angle) and is **one-sided** — doing better than your best is never a deviation; other features (stride length, impact, …) change naturally as gait improves, so they are displayed as z-scores but not scored (with a “maintain” goal all 6 features are scored by Ledoit-Wolf Mahalanobis distance). Every week the best 5 of the last 14 days are re-selected and the baseline only moves up (ratchet). Stepping to a lighter feedback phase requires at least one ratchet in the current phase, so cues fade only after real progress. No population norm is used. |
-| Six-week trajectory | Synthetic, with an assumed S-shaped learning curve. Every number on the dashboard is computed by the full pipeline; none are hard-coded. |
-| Weekly plan | Local Ollama (Qwen2.5-1.5B, the same model targeted for Hailo-10H in Stage II), streamed token by token with measured tokens/s — about 8–10 tok/s and ~500 tokens (~60–80 s) on a laptop CPU. Numbers are interpreted in code; the LLM only writes the narrative (a 1.5B model misreads raw numbers). Chinese output is converted to Traditional Chinese with OpenCC. If Ollama is unavailable, a rule-based fallback is used and **labelled as such** in the UI. |
+| Six-week trajectory | Synthetic, with an assumed S-shaped learning curve and a deliberately conservative size: about 8° of improvement over six weeks, still slightly in-toeing at the end (no published magnitude was available to anchor it, so it is labelled an assumption). The simulator samples 120 strides per day, so cues per day are scaled to an assumed ~2,500 strides/day (~5,000 steps) and capped by the daily budget; on the dashboard, cues fade from ~50/day in week 1 to ~2/day in week 6. Every number on the dashboard is computed by the full pipeline; none are hard-coded. |
+| Weekly plan | Local Ollama (Qwen2.5-1.5B, the same model targeted for Hailo-10H in Stage II), streamed token by token with measured tokens/s — about 12–14 tok/s and ~120 tokens (~10–25 s) on a laptop CPU. A 1.5B model misreads raw numbers, so the prompt contains none: code writes every number and the data analysis, and the LLM writes only the focus, cue advice and summary and picks 2–3 exercises from a vetted list for the training goal (enforced by a JSON-schema enum). The UI states which parts the LLM wrote. Chinese output is converted to Traditional Chinese with OpenCC. If Ollama is unavailable, a rule-based fallback is used and **labelled as such** in the UI. |
 
 ---
 
@@ -120,7 +120,7 @@ Environment variables: `OWNSTRIDE_OLLAMA_URL`, `OWNSTRIDE_LLM_MODEL`, `OWNSTRIDE
 ```bash
 pytest tests/ -v
 ```
-55 tests cover FPA/eversion recovery from IMU signals, the personal-best baseline (best-day selection, one-sided deviation, ratchet), the progress-rate-driven FSM with its progress gate, LLM streaming/fallback (against a fake Ollama server), bilingual plans, the REST API, the WISDM loader and the serial bridge.
+59 tests cover FPA/eversion recovery from IMU signals, the personal-best baseline (best-day selection, one-sided deviation, ratchet), the progress-rate-driven FSM with its progress gate, LLM streaming/fallback (against a fake Ollama server), the code/LLM split of the weekly plan, bilingual plans, the REST API, WISDM timestamp resampling and stride segmentation on all 36 subjects, and the serial bridge.
 
 ### 5. Launch the dashboard
 ```bash
@@ -128,7 +128,7 @@ python run_demo.py
 ```
 Open **`http://127.0.0.1:8000`** (中 / EN toggle top right; every card has a **?** with a plain-language explanation and a technical definition):
 - **L1**: share of today's strides within the personal best, current phase, progress rate, cue budget, foot angle vs. personal best.
-- **Pipeline dock**: add a synthetic walk (strides are cued only above the day's threshold and within budget), close the day to run the daily evaluation, or load WISDM real data (segmentation only).
+- **Pipeline dock**: add a synthetic walk (strides are cued only above the day's threshold and within budget), close the day to run the daily evaluation, or load WISDM real data (stride timing only).
 - **L2**: personal corridor (best-days waveform band vs. today's mean), personal best over time (ratchet), weekly shortfall vs. cues, per-feature z-scores.
 - **L3**: weekly plan, streamed from the local LLM.
 
