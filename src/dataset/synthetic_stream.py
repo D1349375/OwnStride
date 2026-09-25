@@ -260,25 +260,33 @@ class SyntheticGaitStream:
         days_per_week: int = 7,
         strides_per_day: int = 120,
         initial_fpa: float = -13.0,
-        target_fpa: float = 6.5,
+        target_fpa: float = -5.0,
         initial_eversion: float = 6.0,
-        target_eversion: float = 3.0,
+        target_eversion: float = 4.5,
+        initial_fpa_sd: float = 3.5,
+        target_fpa_sd: float = 2.6,
     ) -> List[Dict]:
         """
-        產生多週的「合成訓練軌跡」：足偏角依 S 型學習曲線由 initial_fpa 收斂到 target_fpa，
-        步間變異同步下降。**此軌跡的形狀是假設，不是實測或文獻擬合結果**——
+        產生多週的「合成訓練軌跡」：足偏角依 S 型學習曲線由 initial_fpa 往 target_fpa 移動，
+        步間變異同步下降。**此軌跡的形狀與幅度是假設，不是實測或文獻擬合結果**——
         用途是驗證「基線 → 偏差 → 漸退狀態機」在多週資料上的行為，不代表真實學習速度。
+
+        參數取保守值（2026-09-25 調整）：六週改善約 8°、仍略為內八，而不是一路走到族群常態的 +7°
+        （舊版 −13° → +6.5°，約 20°，且第 18 天就進入 Phase 3，過於樂觀）；第一週幾乎還沒進步。
 
         strides_per_day 是每日抽樣步數（真實一天可達數千步），用於控制運算量。
         """
         sessions = []
         total_days = weeks * days_per_week
+        normal_fpa = GAIT_PRESETS["normal"]["fpa"]
         for day in range(total_days):
             progress = day / max(total_days - 1, 1)
-            learned = 1.0 / (1.0 + np.exp(-7.0 * (progress - 0.45)))
+            learned = 1.0 / (1.0 + np.exp(-6.0 * (progress - 0.5)))
             mean_fpa = initial_fpa + (target_fpa - initial_fpa) * learned
             mean_ev = initial_eversion + (target_eversion - initial_eversion) * learned
-            fpa_sd = 3.5 - 1.7 * learned
+            fpa_sd = initial_fpa_sd + (target_fpa_sd - initial_fpa_sd) * learned
+            # 步長、步時等其他參數依「足偏角往常態走了多少」同比例過渡
+            blend = float(np.clip((mean_fpa - initial_fpa) / (normal_fpa - initial_fpa), 0.0, 1.0))
 
             acc, gyro, meta = self.generate_walk_session(
                 n_strides=strides_per_day,
@@ -287,7 +295,7 @@ class SyntheticGaitStream:
                 custom_eversion=mean_ev,
                 fpa_sd=fpa_sd,
                 blend_to="normal",
-                blend=float(learned),
+                blend=blend,
             )
             sessions.append({
                 "day_index": day,

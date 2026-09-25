@@ -40,8 +40,10 @@ def test_history_trajectory_matches_daily_log(client):
     assert len(weeks) == main.SIM_WEEKS
     week1_days = [d for d in data["daily"] if d["week"] == 1]
     assert weeks[0]["dev"] == pytest.approx(sum(d["mean_deviation"] for d in week1_days) / len(week1_days), abs=1e-2)
-    # 合成軌跡從內八開始逐週改善；個人最佳基線只往目標方向上調（棘輪）
-    assert weeks[0]["fpa"] < 0 < weeks[-1]["fpa"]
+    # 合成軌跡從內八開始逐週改善（保守假設：六週約改善 7°、仍略為內八）；個人最佳基線只往目標方向上調（棘輪）
+    assert weeks[-1]["fpa"] - weeks[0]["fpa"] > 4.0 and weeks[-1]["fpa"] < 0
+    # 提示隨進步漸退：第 1 週（Phase 1）每天用掉的提示明顯多於最後一週
+    assert weeks[0]["cues"] > 5 * weeks[-1]["cues"]
     history = data["baseline_history"]
     assert history[0]["reason"] == "calibration" and len(data["calibration_days"]) == main.CALIBRATION_DAYS
     assert len(history[0]["source_days"]) == main.BEST_K_DAYS

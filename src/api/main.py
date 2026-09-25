@@ -42,6 +42,12 @@ app.add_middleware(
 SAMPLE_RATE = 100.0
 SIM_WEEKS = 6
 SIM_STRIDES_PER_DAY = 120
+# 每日配額（50/20/5）是為全天配戴設計的；一天約 5,000 步 ≈ 感測腳 2,500 跨步（假設值）。
+# 合成歷史每天只抽樣 120 跨步，因此每個抽樣跨步代表約 21 個真實跨步：抽樣步落後超過閾值時，
+# 以同樣比例估算當天的提示次數（仍受配額上限）。現場「加入一段行走」的每一步就是一步，不放大。
+REAL_STRIDES_PER_DAY = 2500
+SAMPLE_WEIGHT = REAL_STRIDES_PER_DAY / SIM_STRIDES_PER_DAY
+TODAY_STRIDES_SO_FAR = 40   # 「今天」是進行中的一天：只載入到目前為止（約上午）的抽樣步，配額還沒用完
 CALIBRATION_DAYS = 14
 BEST_K_DAYS = 5
 RATCHET_WINDOW_DAYS = 14
@@ -62,8 +68,10 @@ DATA_PROVENANCE = {
     "baseline": BASELINE_ASSUMPTION,
     "six_week_trajectory": (
         "Synthetic: a kinematics-first foot-IMU simulator with an assumed S-shaped learning curve "
-        f"({SIM_STRIDES_PER_DAY} sampled strides/day). Every number shown is computed by the full pipeline "
-        "(attitude integration → features → baseline → faded-feedback FSM); none are hard-coded."
+        "(about 8° of improvement over six weeks, still slightly in-toeing at the end) and "
+        f"{SIM_STRIDES_PER_DAY} sampled strides/day. Cues per day are scaled from the sample to an assumed "
+        f"{REAL_STRIDES_PER_DAY:,} strides/day and capped by the daily budget. Every number shown is computed by the "
+        "full pipeline (attitude integration → features → baseline → faded-feedback FSM); none are hard-coded."
     ),
     "walk_button": "Synthetic session generated on demand and processed by the same pipeline.",
     "real_data": (
@@ -88,14 +96,21 @@ class DayLog:
         self.scores: List[float] = []
         self.strides: List[Dict] = []
         self.cues_used = 0
+        self._cue_credit = 0.0   # 累積的真實提示次數估計（含抽樣放大）
 
-    def add(self, features: List[GaitFeatureVector], strides: List[Dict], scores: List[float]) -> List[bool]:
-        """加入一段行走；依當日策略封包逐步判斷是否提示（受每日配額限制），回傳每步是否提示。"""
+    def add(self, features: List[GaitFeatureVector], strides: List[Dict], scores: List[float],
+            weight: float = 1.0) -> List[bool]:
+        """
+        加入一段行走；依當日策略封包逐步判斷是否提示（受每日配額限制），回傳每步是否提示。
+        weight = 每一步代表幾個真實跨步（合成歷史的抽樣步 > 1，現場行走 = 1）。
+        """
         cued = []
+        budget = self.packet.daily_cue_budget
         for s in scores:
-            fire = s > self.packet.cue_threshold and self.cues_used < self.packet.daily_cue_budget
+            fire = s > self.packet.cue_threshold and self.cues_used < budget
             if fire:
-                self.cues_used += 1
+                self._cue_credit += weight
+                self.cues_used = min(budget, int(self._cue_credit))
             cued.append(fire)
         self.features.extend(features)
         self.strides.extend(strides)
@@ -207,12 +222,14 @@ class SystemState:
         packet = self.fsm.build_packet()
         for d in sessions[:-1]:
             day = DayLog(d["day_index"], packet)
-            day.add(*self._process(d["acc"], d["gyro"]))
+            day.add(*self._process(d["acc"], d["gyro"]), weight=SAMPLE_WEIGHT)
             _, packet, _ = self._end_of_day(day)
-        # 最後一天為「今天」，尚未關帳（每日評估尚未執行）
+        # 最後一天為「今天」，尚未關帳（每日評估尚未執行）；只載入到目前為止的步數
         last = sessions[-1]
         self.today = DayLog(last["day_index"], packet)
-        self.today.add(*self._process(last["acc"], last["gyro"]))
+        features, strides, scores = self._process(last["acc"], last["gyro"])
+        n = TODAY_STRIDES_SO_FAR
+        self.today.add(features[:n], strides[:n], scores[:n], weight=SAMPLE_WEIGHT)
         self.latest_packet = packet
 
     # ------------------------------------------------------------------
