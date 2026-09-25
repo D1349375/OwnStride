@@ -1375,7 +1375,7 @@
         strides_unit: "步", synthetic: "合成",
         card_phase: "漸退階段", phase1_name: "密集提示", phase2_name: "漸退適應", phase3_name: "稀疏維持",
         phase1_rate: "基礎 50 次/日", phase2_rate: "基礎 20 次/日", phase3_rate: "基礎 5 次/日",
-        pending: (p, d) => `待確認轉入 Phase ${p}（${d} 天）`,
+        pending: (cur, p, d, n) => `Phase ${cur}（轉入 Phase ${p} 待確認：${d}/${n} 天）`,
         phase_explain: (rate, lv, days) => `進步速率 <strong>${rate}%/週</strong>（近 7 天落後程度的趨勢）• 近 3 日落後 <strong>${lv}τ</strong> • 本階段第 ${days} 天。每階段至少停留 7 天；進步越快，升階門檻越寬、配額越少。`,
         gate_open: (n) => ` <span style="color:var(--status-normal)">✓ 本階段個人最佳已上調 ${n} 次，符合升階的進步條件。</span>`,
         gate_closed: ` <span style="color:var(--status-caution)">升階前需要真的進步：本階段個人最佳尚未上調（每週檢查一次）。</span>`,
@@ -1399,6 +1399,7 @@
         st_cued: "觸發提示", st_in: "在最佳範圍內", st_out: "落後但未提示（配額或閾值）",
         close_done: (d, dev, rate, ph, changed, b, th) => `✓ 第 ${d} 天關帳：平均落後 ${dev} • 進步速率 ${rate}%/週 ➔ ${changed ? `<strong>轉入 Phase ${ph}</strong>` : `維持 Phase ${ph}`} • 明日配額 ${b} 次、閾值 ${th}`,
         ratchet_done: (v) => ` • <strong>個人最佳上調至 ${v}°</strong>`,
+        close_pending: (p, d, n) => ` • 今天偏離較多，<strong>轉入 Phase ${p} 待確認（${d}/${n} 天）</strong>：連續 ${n} 天都如此才會轉換，明天恢復就取消`,
         wisdm_done: (u, n, dur, ms) => `✓ WISDM 受試者 #${u}（手機加速度，無陀螺儀）• 切出 <strong>${n}</strong> 個步態週期：${dur} • <strong>此資料無法計算足偏角</strong> • ${ms} ms`,
         wisdm_legend: "實心 = 支撐期、空心 = 擺動期（真人加速度切分結果）", wisdm_badge: "WISDM 真人資料：僅步態週期時間",
         track_axis: "前進方向 →   虛線 = 每步實際前進方向（FPA 以此為 0°）",
@@ -1477,7 +1478,7 @@
         strides_unit: "strides", synthetic: "synthetic",
         card_phase: "Feedback phase", phase1_name: "Frequent", phase2_name: "Fading", phase3_name: "Retention",
         phase1_rate: "base 50/day", phase2_rate: "base 20/day", phase3_rate: "base 5/day",
-        pending: (p, d) => `Moving to Phase ${p} (day ${d} of confirmation)`,
+        pending: (cur, p, d, n) => `Phase ${cur} (Phase ${p} pending: day ${d}/${n})`,
         phase_explain: (rate, lv, days) => `Progress <strong>${rate}%/week</strong> (7-day trend of the shortfall) • last 3 days <strong>${lv}τ</strong> • day ${days} in this phase. At least 7 days per phase; faster progress widens the step-up threshold and trims the budget.`,
         gate_open: (n) => ` <span style="color:var(--status-normal)">✓ Personal best raised ${n}× in this phase — progress requirement for stepping up is met.</span>`,
         gate_closed: ` <span style="color:var(--status-caution)">Stepping up needs real progress: your personal best has not been raised in this phase yet (checked weekly).</span>`,
@@ -1501,6 +1502,7 @@
         st_cued: "cue fired", st_in: "within best range", st_out: "behind, no cue (budget or threshold)",
         close_done: (d, dev, rate, ph, changed, b, th) => `✓ Day ${d} closed: mean shortfall ${dev} • progress ${rate}%/week ➔ ${changed ? `<strong>moved to Phase ${ph}</strong>` : `stays in Phase ${ph}`} • tomorrow: ${b} cues, threshold ${th}`,
         ratchet_done: (v) => ` • <strong>personal best raised to ${v}°</strong>`,
+        close_pending: (p, d, n) => ` • today slipped, so <strong>Phase ${p} is pending (day ${d}/${n})</strong>: it switches only after ${n} such days in a row and is cancelled if tomorrow recovers`,
         wisdm_done: (u, n, dur, ms) => `✓ WISDM subject #${u} (phone accelerometer, no gyroscope) • <strong>${n}</strong> gait cycles: ${dur} • <strong>foot progression angle cannot be computed from this data</strong> • ${ms} ms`,
         wisdm_legend: "Filled = stance, outline = swing (segmentation of real accelerometer data)", wisdm_badge: "WISDM real data: stride timing only",
         track_axis: "walking direction →   dashed = each stride's actual direction (FPA 0°)",
@@ -1711,7 +1713,8 @@
       [1, 2, 3].forEach((i) => { $(`phase-node-${i}`).className = "phase-node" + (i === cur ? " active" : i < cur ? " done" : ""); });
       $("phase-conn-1").className = "phase-connector" + (cur > 1 ? " passed" : "");
       $("phase-conn-2").className = "phase-connector" + (cur > 2 ? " passed" : "");
-      $("fsm-status-tag").textContent = p.pending_phase ? t.pending(p.pending_phase, p.days_in_pending_state) : p.phase_name;
+      $("fsm-status-tag").textContent = p.pending_phase
+        ? t.pending(p.current_phase, p.pending_phase, p.days_in_pending_state, p.debounce_days) : p.phase_name;
       $("phase-explain").innerHTML = t.phase_explain(fmtSigned(p.progress_rate * 100), (p.deviation_level / tau).toFixed(2), p.days_in_phase ?? "—")
         + (p.requires_progress && cur < 3 ? (p.progress_events_in_phase > 0 ? t.gate_open(p.progress_events_in_phase) : t.gate_closed) : "");
 
@@ -1936,7 +1939,9 @@
         if (!res.ok) throw new Error(data.detail || res.status);
         const d = data.closed_day, p = data.strategy_packet;
         setTelemetry(T().close_done(d.day_index + 1, d.mean_deviation.toFixed(2), fmtSigned(p.progress_rate * 100), data.phase,
-          data.phase_changed, p.daily_cue_budget, p.cue_threshold.toFixed(2)) + (data.baseline_ratcheted ? T().ratchet_done(fmtSigned(data.baseline.best_fpa)) : ""));
+          data.phase_changed, p.daily_cue_budget, p.cue_threshold.toFixed(2))
+          + (data.pending_phase ? T().close_pending(data.pending_phase, data.days_in_pending_state, data.debounce_days) : "")
+          + (data.baseline_ratcheted ? T().ratchet_done(fmtSigned(data.baseline.best_fpa)) : ""));
         drawTrackBg();
         await refresh();
       } catch (err) { setTelemetry(T().failed(err.message)); } finally { btn.disabled = false; }
